@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Srovnávač předpovědí počasí</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --border: rgba(11,11,11,.10);
+  --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --other: #c3c2b7; --obs: #0b0b0b;
+  --bar: #86b6ef; --good: #006300; --bad: #d03b3b; --accent-wash: #eef4fc;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --border: rgba(255,255,255,.10);
+    --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --other: #4a4a46; --obs: #f0efec;
+    --bar: #1c5cab; --good: #0ca30c; --bad: #e66767; --accent-wash: #16263a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1080px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -.01em; }
+h2 { font-size: 18px; margin: 0 0 4px; }
+.sub { color: var(--ink-2); margin: 0 0 20px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 20px; margin-bottom: 16px; }
+.note { color: var(--muted); font-size: 13px; margin: 0 0 14px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+.tile .k { color: var(--ink-2); font-size: 13px; }
+.tile .v { font-size: 24px; font-weight: 600; margin-top: 2px; line-height: 1.2; }
+.tile .v.small { font-size: 17px; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 14px; }
+.tabs button { font: inherit; font-size: 14px; border: 1px solid var(--border); background: transparent;
+  color: var(--ink-2); padding: 6px 12px; border-radius: 999px; cursor: pointer; }
+.tabs button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.scroll { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { color: var(--ink-2); font-weight: 500; font-size: 13px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr.top td { background: var(--accent-wash); }
+.barcell { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+.bar { height: 8px; border-radius: 0 4px 4px 0; background: var(--bar); }
+.rank { font-weight: 600; width: 2em; }
+.chart { position: relative; height: 320px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--ink-2); margin-top: 10px; }
+.legend span::before { content: ""; display: inline-block; width: 14px; height: 3px; border-radius: 2px;
+  background: var(--c); vertical-align: middle; margin-right: 6px; }
+.ok { color: var(--good); } .err { color: var(--bad); }
+.empty { padding: 32px 0; color: var(--ink-2); text-align: center; }
+details summary { cursor: pointer; font-weight: 600; }
+details p, details li { color: var(--ink-2); }
+code { font-size: 13px; }
+@media (max-width: 600px) {
+  .card { padding: 16px 12px; }
+  td.name { white-space: normal; min-width: 130px; max-width: 150px; line-height: 1.3; }
+  th, td { padding: 8px 6px; }
+  .bar { display: none; }
+}
+.tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.12); min-width: 200px; z-index: 2; }
+.tip b { display: block; margin-bottom: 4px; }
+.tip div { display: flex; align-items: center; gap: 6px; color: var(--ink-2); white-space: nowrap; }
+.tip i { width: 10px; height: 3px; border-radius: 2px; flex: none; }
+.tip span { margin-left: auto; padding-left: 12px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.tip .more { color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Srovnávač předpovědí počasí</h1>
+  <p class="sub" id="sub">Načítám výsledky…</p>
+
+  <div class="tiles" id="tiles"></div>
+
+  <section class="card">
+    <h2>Žebříček přesnosti</h2>
+    <p class="note">Nižší chyba = lepší. Pořadí je vážený průměr umístění: teplota 40 %, srážky 30 %, vítr 15 %, vlhkost 15 %.</p>
+    <div class="tabs" id="tabs" role="group" aria-label="Předstih předpovědi"></div>
+    <div class="scroll" id="ranking"></div>
+  </section>
+
+  <section class="card">
+    <h2>Chyba teploty podle předstihu</h2>
+    <p class="note">Průměrná absolutní chyba (°C) podle toho, kolik hodin dopředu byla předpověď vydaná. Barevně tři nejlepší, ostatní šedě.</p>
+    <div class="chart" id="leadChart"></div>
+    <div class="legend" id="leadLegend"></div>
+  </section>
+
+  <section class="card">
+    <h2>Co hlásí teď</h2>
+    <p class="note" id="latestNote">Poslední stažená předpověď teploty a naměřené hodnoty ze stanice ČHMÚ.</p>
+    <div class="chart" id="latestChart"></div>
+    <div class="legend" id="latestLegend"></div>
+  </section>
+
+  <section class="card">
+    <h2>Spolehlivost API</h2>
+    <p class="note">Kolik volání se povedlo a jak rychle API odpovídá.</p>
+    <div class="scroll" id="avail"></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Jak se to počítá</summary>
+      <ul>
+        <li>Každé 3 hodiny se stáhnou předpovědi na 72 hodin dopředu ode všech poskytovatelů a uloží se.</li>
+        <li>Skutečnost = 10minutová data ze stanice ČHMÚ (opendata.chmi.cz). Teplota, vlhkost a vítr v celou hodinu, srážky jako hodinový úhrn.</li>
+        <li><b>MAE</b> je průměrná absolutní chyba. <b>Bias</b> ukazuje, jestli poskytovatel soustavně přestřeluje (+) nebo podstřeluje (−).</li>
+        <li>Srážky se hodnotí v 6hodinových oknech: „pršelo“ znamená aspoň 0,5 mm. <b>Trefa</b> je podíl oken, kde předpověď správně řekla ano/ne.</li>
+        <li>Do žebříčku se poskytovatel dostane až po 24 spárovaných hodinách. Spolehlivé závěry dají až 2–4 týdny dat a různé typy počasí.</li>
+        <li>Vítr se porovnává jako 10minutový průměr v 10 m; nárazy se nehodnotí.</li>
+      </ul>
+    </details>
+  </section>
+</main>
+
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (v, d = 2) => v == null ? "–" : v.toLocaleString("cs-CZ", {minimumFractionDigits: d, maximumFractionDigits: d});
+const pct = v => v == null ? "–" : Math.round(v * 100) + " %";
+const dt = s => new Date(s).toLocaleString("cs-CZ", {day: "numeric", month: "numeric", hour: "2-digit", minute: "2-digit"});
+const BUCKET_LABEL = {"1-24": "Dnes a zítra (1–24 h)", "25-48": "Pozítří (25–48 h)", "49-72": "Za 3 dny (49–72 h)"};
+let R, bucket = "1-24";
+
+function label(id) { return (R.providers.find(p => p.id === id) || {label: id}).label; }
+function topIds(n = 3) { return (R.ranking["1-24"] || []).slice(0, n).map(r => r.provider); }
+function seriesColor(id) {
+  const i = topIds().indexOf(id);
+  return i >= 0 ? css(["--s1", "--s2", "--s3"][i]) : css("--other");
+}
+
+function renderTiles() {
+  const top = (R.ranking["1-24"] || [])[0];
+  const m = top && R.metrics[top.provider]["1-24"];
+  const days = R.period.first_issued
+    ? ((new Date(R.period.last_issued) - new Date(R.period.first_issued)) / 864e5).toFixed(1) : 0;
+  document.getElementById("tiles").innerHTML = `
+    <div class="tile"><div class="k">Zatím nejpřesnější (1–24 h)</div>
+      <div class="v small">${top ? label(top.provider) : "Čekám na data"}</div></div>
+    <div class="tile"><div class="k">Jeho chyba teploty</div>
+      <div class="v">${m ? fmt(m.temp.mae, 1) + " °C" : "–"}</div></div>
+    <div class="tile"><div class="k">Sbírá se</div><div class="v">${String(days).replace(".", ",")} dní</div></div>
+    <div class="tile"><div class="k">Stažení / hodin měření</div><div class="v">${R.n_runs} / ${R.n_obs_hours}</div></div>`;
+}
+
+function renderTabs() {
+  document.getElementById("tabs").innerHTML = R.buckets.map(b =>
+    `<button aria-pressed="${b === bucket}" data-b="${b}">${BUCKET_LABEL[b] || b}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(btn =>
+    btn.onclick = () => { bucket = btn.dataset.b; renderTabs(); renderRanking(); });
+}
+
+function renderRanking() {
+  const rows = R.ranking[bucket] || [];
+  const ranked = new Set(rows.map(r => r.provider));
+  const rest = R.providers.map(p => p.id).filter(id => !ranked.has(id));
+  if (!rows.length && !rest.length) {
+    document.getElementById("ranking").innerHTML = `<div class="empty">Zatím žádná data.</div>`; return;
+  }
+  const maxMae = Math.max(...rows.map(r => R.metrics[r.provider][bucket].temp.mae), 0.01);
+  const line = (id, rank, cls = "") => {
+    const m = R.metrics[id][bucket];
+    const w = m.temp.mae != null ? Math.max(4, 80 * m.temp.mae / maxMae) : 0;
+    return `<tr class="${cls}"><td class="rank">${rank}</td><td class="name">${label(id)}</td>
+      <td class="num"><div class="barcell"><span class="bar" style="width:${w}px"></span>${fmt(m.temp.mae)}</div></td>
+      <td class="num">${m.temp.bias != null ? (m.temp.bias > 0 ? "+" : "") + fmt(m.temp.bias) : "–"}</td>
+      <td class="num">${fmt(m.wind.mae)}</td><td class="num">${fmt(m.rh.mae, 1)}</td>
+      <td class="num">${pct(m.precip.acc)}</td><td class="num">${pct(m.precip.pod)}</td>
+      <td class="num">${m.temp.n} / ${m.precip.n}</td></tr>`;
+  };
+  document.getElementById("ranking").innerHTML = `<table>
+    <thead><tr><th>#</th><th>Poskytovatel</th><th class="num">Teplota MAE °C</th><th class="num">Bias °C</th>
+      <th class="num">Vítr MAE m/s</th><th class="num">Vlhkost MAE %</th><th class="num">Srážky trefa</th>
+      <th class="num">Zachycené srážky</th><th class="num">Páry h / okna</th></tr></thead>
+    <tbody>${rows.map((r, i) => line(r.provider, i + 1, i === 0 ? "top" : "")).join("")}
+      ${rest.map(id => line(id, "–")).join("")}</tbody></table>
+    ${rest.length ? `<p class="note" style="margin-top:10px">Bez pořadí: zatím málo spárovaných dat pro tento předstih.</p>` : ""}`;
+}
+
+function niceTicks(min, max, n = 5) {
+  const span = max - min || 1, step0 = span / n, mag = 10 ** Math.floor(Math.log10(step0));
+  const step = [1, 2, 2.5, 5, 10].map(f => f * mag).find(s => span / s <= n) || 10 * mag;
+  const ticks = []; for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) ticks.push(+v.toFixed(6));
+  return ticks;
+}
+
+// Lehký SVG spojnicový graf s křížovým kurzorem a tooltipem.
+function lineChart(el, sets, o) {
+  const W = el.clientWidth || 600, H = el.clientHeight || 320, m = {l: 44, r: 12, t: 10, b: o.xTitle ? 40 : 26};
+  const pts = sets.flatMap(s => s.points);
+  if (!pts.length) { el.innerHTML = `<div class="empty">Zatím žádná data.</div>`; return; }
+  let x0 = Math.min(...pts.map(p => p[0])), x1 = Math.max(...pts.map(p => p[0]));
+  let y0 = Math.min(...pts.map(p => p[1])), y1 = Math.max(...pts.map(p => p[1]));
+  if (o.yZero) y0 = 0; const pad = (y1 - y0) * .08 || 1; y1 += pad; if (!o.yZero) y0 -= pad;
+  const yt = niceTicks(y0, y1); y0 = Math.min(y0, yt[0]); y1 = Math.max(y1, yt[yt.length - 1]);
+  const X = v => m.l + (v - x0) / (x1 - x0 || 1) * (W - m.l - m.r), Y = v => H - m.b - (v - y0) / (y1 - y0) * (H - m.t - m.b);
+  const xt = o.xTicks ? o.xTicks(x0, x1, W) : niceTicks(x0, x1, Math.max(3, Math.floor(W / 90)));
+  const grid = css("--grid"), muted = css("--muted"), axis = css("--axis"), surf = css("--surface");
+  let svg = `<svg width="${W}" height="${H}" role="img" aria-label="${o.aria}" style="display:block;overflow:visible">`;
+  yt.forEach(v => svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(v)}" y2="${Y(v)}" stroke="${grid}"/>
+    <text x="${m.l - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="${muted}" style="font-variant-numeric:tabular-nums">${fmt(v, Number.isInteger(v) ? 0 : 1)}</text>`);
+  svg += `<line x1="${m.l}" x2="${W - m.r}" y1="${H - m.b}" y2="${H - m.b}" stroke="${axis}"/>`;
+  xt.forEach(v => svg += `<text x="${X(v)}" y="${H - m.b + 16}" text-anchor="middle" font-size="11" fill="${muted}">${o.xFmt(v)}</text>`);
+  if (o.xTitle) svg += `<text x="${(W + m.l) / 2}" y="${H - 4}" text-anchor="middle" font-size="12" fill="${muted}">${o.xTitle}</text>`;
+  if (o.nowX != null && o.nowX > x0 && o.nowX < x1) svg += `<line x1="${X(o.nowX)}" x2="${X(o.nowX)}" y1="${m.t}" y2="${H - m.b}" stroke="${axis}" stroke-dasharray="4 4"/>
+    <text x="${X(o.nowX) + 4}" y="${m.t + 10}" font-size="11" fill="${muted}">vydáno</text>`;
+  sets.forEach(s => {
+    if (s.points.length < 2) return;
+    const d = s.points.map((p, i) => `${i ? "L" : "M"}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join("");
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 2}" stroke-linejoin="round" stroke-linecap="round"/>`;
+    if (s.marker) s.points.forEach(p => svg += `<circle cx="${X(p[0])}" cy="${Y(p[1])}" r="4" fill="${s.color}" stroke="${surf}" stroke-width="2"/>`);
+  });
+  svg += `<g class="hov" style="display:none"><line class="hl" y1="${m.t}" y2="${H - m.b}" stroke="${muted}"/><g class="hd"></g></g>
+    <rect x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${H - m.t - m.b}" fill="transparent"/></svg>
+    <div class="tip" style="display:none"></div>`;
+  el.innerHTML = svg; el.style.position = "relative";
+  const xs = [...new Set(pts.map(p => p[0]))].sort((a, b) => a - b);
+  const hov = el.querySelector(".hov"), tip = el.querySelector(".tip"), rect = el.querySelector("rect");
+  const show = ev => {
+    const bx = el.getBoundingClientRect(), mx = (ev.touches ? ev.touches[0].clientX : ev.clientX) - bx.left;
+    const xv = x0 + (mx - m.l) / (W - m.l - m.r) * (x1 - x0);
+    const near = xs.reduce((a, b) => Math.abs(b - xv) < Math.abs(a - xv) ? b : a);
+    const rows = sets.map(s => ({s, p: s.points.find(p => p[0] === near)})).filter(r => r.p).sort((a, b) => b.p[1] - a.p[1]);
+    hov.style.display = ""; const hx = X(near);
+    hov.querySelector(".hl").setAttribute("x1", hx); hov.querySelector(".hl").setAttribute("x2", hx);
+    hov.querySelector(".hd").innerHTML = rows.filter(r => r.s.emph).map(r => `<circle cx="${hx}" cy="${Y(r.p[1])}" r="4.5" fill="${r.s.color}" stroke="${surf}" stroke-width="2"/>`).join("");
+    const shown = rows.filter(r => r.s.emph).concat(rows.filter(r => !r.s.emph)).slice(0, 8);
+    tip.innerHTML = `<b>${o.tipTitle(near)}</b>` + shown.map(r =>
+      `<div><i style="background:${r.s.color}"></i>${r.s.label}<span>${fmt(r.p[1], 1)} ${o.unit}</span></div>`).join("")
+      + (rows.length > shown.length ? `<div class="more">+ ${rows.length - shown.length} dalších</div>` : "");
+    tip.style.display = ""; const tw = tip.offsetWidth;
+    tip.style.left = Math.max(0, Math.min(W - tw, hx + (hx > W / 2 ? -tw - 12 : 12))) + "px"; tip.style.top = m.t + "px";
+  };
+  const hide = () => { hov.style.display = "none"; tip.style.display = "none"; };
+  rect.addEventListener("mousemove", show); rect.addEventListener("touchstart", show, {passive: true});
+  rect.addEventListener("touchmove", show, {passive: true}); rect.addEventListener("mouseleave", hide);
+}
+
+function legendHtml(ids, extra = "") {
+  const top = topIds();
+  return extra + top.filter(id => ids.includes(id)).map(id => `<span style="--c:${seriesColor(id)}">${label(id)}</span>`).join("")
+    + (ids.some(id => !top.includes(id)) ? `<span style="--c:${css("--other")}">Ostatní</span>` : "");
+}
+
+// Šedé čáry kreslit dospod, tři nejlepší navrch.
+function orderForDraw(ids) { const top = topIds(); return [...ids.filter(i => !top.includes(i)), ...top.filter(i => ids.includes(i)).reverse()]; }
+
+function renderLead() {
+  const ids = orderForDraw(Object.keys(R.temp_mae_by_lead)), top = topIds();
+  const sets = ids.map(id => ({label: label(id), color: seriesColor(id), emph: top.includes(id),
+    width: top.includes(id) ? 2 : 1.5, marker: top.includes(id),
+    points: R.temp_mae_by_lead[id].map(([h, mae]) => [h, mae])}));
+  lineChart(document.getElementById("leadChart"), sets, {yZero: true, unit: "°C", xTitle: "Předstih předpovědi (hodiny)",
+    aria: "Chyba teploty podle předstihu", xFmt: v => v + " h", tipTitle: v => `Předstih ${v - 5}–${v} h`,
+    xTicks: (a, b) => niceTicks(0, b, 6).filter(v => v >= a)});
+  document.getElementById("leadLegend").innerHTML = legendHtml(ids);
+}
+
+function renderLatest() {
+  const L = R.latest; if (!L || !L.forecasts) return;
+  const ids = orderForDraw(Object.keys(L.forecasts)), top = topIds();
+  const sets = ids.map(id => ({label: label(id), color: seriesColor(id), emph: top.includes(id),
+    width: top.includes(id) ? 2 : 1.25, points: L.forecasts[id].map(([t, v]) => [Date.parse(t), v])}));
+  sets.push({label: "Naměřeno (ČHMÚ)", color: css("--obs"), width: 2.5, emph: true,
+    points: L.obs.map(([t, v]) => [Date.parse(t), v])});
+  const day = 864e5;
+  lineChart(document.getElementById("latestChart"), sets, {unit: "°C", aria: "Poslední předpověď teploty",
+    nowX: Date.parse(L.issued_utc), tipTitle: dt,
+    xFmt: v => new Date(v).toLocaleDateString("cs-CZ", {weekday: "short", day: "numeric", month: "numeric"}),
+    xTicks: (a, b) => { const t = []; const d = new Date(a); d.setHours(0, 0, 0, 0);
+      for (let v = d.getTime() + day; v <= b; v += day) t.push(v); return t; }});
+  document.getElementById("latestNote").textContent = `Předpověď stažená ${dt(L.issued_utc)} a měření ze stanice ČHMÚ za posledních 48 hodin.`;
+  document.getElementById("latestLegend").innerHTML =
+    legendHtml(ids, `<span style="--c:${css("--obs")}">Naměřeno (ČHMÚ)</span>`);
+}
+
+function renderAvail() {
+  const A = R.availability; const ids = Object.keys(A).sort((a, b) => (A[b].rate ?? 0) - (A[a].rate ?? 0));
+  if (!ids.length) { document.getElementById("avail").innerHTML = `<div class="empty">Zatím žádná data.</div>`; return; }
+  const name = id => id === "openmeteo" ? "Open-Meteo (všechny modely)" : id === "chmi_observations" ? "ČHMÚ měření" : label(id);
+  document.getElementById("avail").innerHTML = `<table><thead><tr><th>Zdroj</th><th class="num">Úspěšnost</th>
+    <th class="num">Volání</th><th class="num">Odezva (medián)</th><th>Poslední chyba</th></tr></thead><tbody>
+    ${ids.map(id => { const a = A[id]; const good = a.rate >= .95;
+      return `<tr><td>${name(id)}</td><td class="num ${good ? "ok" : "err"}">${good ? "✓" : "⚠"} ${pct(a.rate)}</td>
+      <td class="num">${a.ok} / ${a.runs}</td><td class="num">${a.latency_ms != null ? a.latency_ms + " ms" : "–"}</td>
+      <td style="white-space:normal;color:var(--muted);font-size:13px">${a.last_error || "–"}</td></tr>`; }).join("")}
+    </tbody></table>`;
+}
+
+function renderAll() { renderTiles(); renderTabs(); renderRanking(); renderLead(); renderLatest(); renderAvail(); }
+
+fetch("results.json", {cache: "no-store"}).then(r => r.json()).then(data => {
+  R = data;
+  document.getElementById("sub").textContent =
+    `${R.location} · měření: ${R.station} · aktualizováno ${dt(R.generated_utc)}`;
+  renderAll();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
+  let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderLead(); renderLatest(); }, 150); });
+}).catch(() => {
+  document.getElementById("sub").textContent = "Výsledky zatím nejsou k dispozici. Spusťte první sběr dat (viz README).";
+});
+</script>
+</body>
+</html>
