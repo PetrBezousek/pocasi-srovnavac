@@ -5,6 +5,10 @@ on:
     # Každé 3 hodiny v 17. minutě (UTC). ČHMÚ nahrává data kolem 2. minuty po celé.
     - cron: "17 */3 * * *"
   workflow_dispatch: {}
+  # Spustí se i po nahrání změn do kódu (commity robota sběr znovu nespouštějí).
+  push:
+    branches: [main]
+    paths-ignore: ["data/**", "docs/results.json", "**.md"]
 
 permissions:
   contents: write

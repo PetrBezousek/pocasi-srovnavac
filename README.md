@@ -27,23 +27,17 @@ S API klíčem (volitelné, zdarma po registraci):
 Hodnotí se teplota, relativní vlhkost, rychlost větru a srážky, zvlášť pro
 předpovědi na 1–24 h, 25–48 h a 49–72 h dopředu.
 
-## Zprovoznění (cca 10 minut)
+## Zprovoznění
 
-1. Na GitHubu založte nový repozitář (může být veřejný i soukromý) a nahrajte
-   do něj obsah této složky. Nejjednodušší je přes webové rozhraní:
-   **Add file → Upload files** a přetáhnout všechny soubory a složky.
-   Pozor, aby se nahrála i skrytá složka `.github`.
-2. **Settings → Actions → General → Workflow permissions** nastavte na
-   *Read and write permissions* a uložte.
-3. **Actions → Sběr předpovědí → Run workflow** spustí první sběr hned.
-   Dál poběží samo každé 3 hodiny.
-4. Dashboard: **Settings → Pages → Source: Deploy from a branch**,
-   větev `main`, složka `/docs`. Za minutu bude na adrese
-   `https://<uživatel>.github.io/<repozitář>/`.
-   (U soukromého repozitáře vyžadují Pages placený účet GitHubu; jinak
-   repozitář nastavte jako veřejný.)
-5. Volitelně přidejte API klíče: **Settings → Secrets and variables →
-   Actions → New repository secret** s názvy z tabulky výše.
+Sběr běží sám každé 3 hodiny přes GitHub Actions (práva k zápisu si workflow
+vyžádá sám). Ručně je potřeba jen:
+
+1. **Dashboard:** Settings → Pages → Source: *Deploy from a branch*,
+   větev `main`, složka `/docs` → Save. Za minutu bude na adrese
+   https://petrbezousek.github.io/pocasi-srovnavac/
+2. Volitelně API klíče: **Settings → Secrets and variables → Actions →
+   New repository secret** s názvy z tabulky výše.
+3. Sběr lze spustit i ručně: **Actions → Sběr předpovědí → Run workflow**.
 
 ## Kdy budou výsledky
 
