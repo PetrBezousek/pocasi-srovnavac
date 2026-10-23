@@ -142,7 +142,7 @@ def parse_open_meteo(data, issued):
     for model in models:
         # Při více modelech má každá proměnná příponu, např. temperature_2m_icon_d2.
         def series(var):
-            return hourly.get(var if single else f"{var}_{model}") or []
+            return hourly.get(f"{var}_{model}") or (hourly.get(var) if single else None) or []
         t2m = series("temperature_2m")
         rh = series("relative_humidity_2m")
         ws = series("wind_speed_10m")
@@ -168,8 +168,27 @@ def fetch_open_meteo(issued):
         "wind_speed_unit": "ms", "timezone": "GMT",
         "forecast_days": math.ceil(config.HORIZON_H / 24) + 1,
     }
-    url = "https://api.open-meteo.com/v1/forecast?" + urllib.parse.urlencode(params)
-    return parse_open_meteo(http_json(url), issued)
+    base = "https://api.open-meteo.com/v1/forecast?"
+    try:
+        return parse_open_meteo(http_json(base + urllib.parse.urlencode(params)), issued)
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+    # Některý název modelu API nezná: stáhnout modely po jednom a vadné přeskočit.
+    rows, bad = [], []
+    for model in config.OPEN_METEO_MODELS:
+        try:
+            data = http_json(base + urllib.parse.urlencode({**params, "models": model}), retries=0)
+        except urllib.error.HTTPError:
+            bad.append(model)
+            continue
+        # Při jednom modelu nemají proměnné příponu -> doplnit ji.
+        hourly = data.get("hourly", {})
+        data["hourly"] = {(k if k == "time" else f"{k}_{model}"): v for k, v in hourly.items()}
+        rows += [r for r in parse_open_meteo(data, issued) if r["provider"] == f"openmeteo_{model}"]
+    if bad:
+        print("Open-Meteo: neznámé modely " + ", ".join(bad))
+    return rows
 
 
 def parse_metno(data, issued):

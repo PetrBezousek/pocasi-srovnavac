@@ -21,7 +21,7 @@ OPEN_METEO_MODELS = {
     "icon_d2": "Open-Meteo: DWD ICON-D2 (2 km)",
     "icon_eu": "Open-Meteo: DWD ICON-EU (7 km)",
     "ecmwf_ifs025": "Open-Meteo: ECMWF IFS",
-    "ecmwf_aifs025": "Open-Meteo: ECMWF AIFS (AI model)",
+    "ecmwf_aifs025_single": "Open-Meteo: ECMWF AIFS (AI model)",
     "gfs_seamless": "Open-Meteo: NOAA GFS",
     "meteofrance_seamless": "Open-Meteo: Météo-France ARPEGE/AROME",
     "ukmo_seamless": "Open-Meteo: UK Met Office",
