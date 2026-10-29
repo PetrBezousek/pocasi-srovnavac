@@ -95,3 +95,7 @@ run_utc,provider,ok,rows,latency_ms,error
 2026-10-28T20:20:53Z,metno,1,65,778,
 2026-10-28T20:20:53Z,brightsky,1,72,572,
 2026-10-28T20:20:53Z,chmi_observations,1,44,2749,
+2026-10-29T01:01:55Z,openmeteo,1,764,972,
+2026-10-29T01:01:55Z,metno,1,61,710,
+2026-10-29T01:01:55Z,brightsky,1,72,637,
+2026-10-29T01:01:55Z,chmi_observations,0,0,2590,HTTPError: HTTP Error 404: Not Found
