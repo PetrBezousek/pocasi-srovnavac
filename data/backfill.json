@@ -1,0 +1,11 @@
+{
+ "2026-10": {
+  "checked": "2026-11-06T22:47:24Z",
+  "done": true,
+  "hours": 744,
+  "files": {
+   "10m": "https://opendata.chmi.cz/meteorology/climate/recent/data/10min/10/10m-0-20000-0-11679-202610.json",
+   "1h": "https://opendata.chmi.cz/meteorology/climate/recent/data/1hour/10/1h-0-20000-0-11679-202610.json"
+  }
+ }
+}
