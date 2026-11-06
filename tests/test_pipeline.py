@@ -9,6 +9,7 @@ import random
 import sys
 import tempfile
 import unittest
+import urllib.error
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -156,6 +157,119 @@ class EvaluateTests(unittest.TestCase):
         self.assertGreater(m["precip"]["n"], 20)
         self.assertGreater(m["precip"]["acc"], res["metrics"]["bad"]["1-24"]["precip"]["acc"])
         self.assertEqual(res["availability"]["bad"]["rate"], 0)
+
+
+def chmi_payload(rows):
+    return {"data": {"type": "DataCollection", "data": {
+        "header": "STATION,ELEMENT,DT,VAL,FLAG,QUALITY", "values": rows}}}
+
+
+class ChmiFixesTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self._saved = (collect.OBS_FILE, collect.BACKFILL_FILE, collect.http_json, collect.http_text)
+        collect.OBS_FILE = self.tmp / "observations.csv"
+        collect.BACKFILL_FILE = self.tmp / "backfill.json"
+
+    def tearDown(self):
+        collect.OBS_FILE, collect.BACKFILL_FILE, collect.http_json, collect.http_text = self._saved
+
+    @staticmethod
+    def day_10m(day, temp=5.0):
+        rows = []
+        for i in range(144):
+            ts = collect.iso(day + timedelta(minutes=10 * i))
+            rows += [["x", "T", ts, temp, "", 5], ["x", "H", ts, 80, "", 5],
+                     ["x", "F", ts, 2, "", 5], ["x", "SRA10M", ts, 0.0, "", 5]]
+        return chmi_payload(rows)
+
+    def test_today_404_keeps_yesterday(self):
+        now = datetime(2026, 11, 1, 0, 11, tzinfo=UTC)
+
+        def fake(url, headers=None, retries=2):
+            if "20261101" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            if "/10m-" in url:
+                return self.day_10m(datetime(2026, 10, 31, tzinfo=UTC))
+            return chmi_payload([["x", "ww", "2026-10-31T05:00:00Z", 130, "", 5]])
+        collect.http_json = fake
+        obs, partial = collect.fetch_observations(now)
+        self.assertIn("2026-10-31T12:00:00Z", obs)
+        self.assertEqual(obs["2026-10-31T05:00:00Z"]["ww"], 130)
+        self.assertEqual(len(partial), 2)  # dnešní 10m i 1h chybí
+
+    def test_both_days_missing_is_error(self):
+        def fake(url, headers=None, retries=2):
+            raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+        collect.http_json = fake
+        with self.assertRaises(RuntimeError):
+            collect.fetch_observations(datetime(2026, 11, 1, 12, tzinfo=UTC))
+
+    def test_backfill_fills_gap_from_monthly_file(self):
+        # Měření s výpadkem teploty 24. 10.
+        start = datetime(2026, 10, 22, tzinfo=UTC)
+        with collect.OBS_FILE.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(collect.OBS_FIELDS)
+            h = start
+            while h < datetime(2026, 11, 6, tzinfo=UTC):
+                gap = h.date().isoformat() == "2026-10-24"
+                w.writerow([collect.iso(h), "" if gap else 5, "" if gap else 80, 2, 0, "", ""])
+                h += timedelta(hours=1)
+        listing = '<a href="../">../</a><a href="10m-{w}-202610.json">x</a><a href="1h-{w}-202610.json">y</a>'
+        listing = listing.format(w=config.CHMI_STATION_WSI)
+        seen = []
+
+        def fake_text(url):
+            seen.append(url)
+            if url.endswith("/recent/data/10min/10/") or url.endswith("/recent/data/1hour/10/"):
+                return listing
+            raise urllib.error.HTTPError(url, 404, "nf", None, None)
+
+        def fake_json(url, headers=None, retries=2):
+            if "/10m-" in url:
+                return self.day_10m(datetime(2026, 10, 24, tzinfo=UTC), temp=7.5)
+            return chmi_payload([["x", "ww", "2026-10-24T03:00:00Z", 161, "", 5]])
+        collect.http_text, collect.http_json = fake_text, fake_json
+
+        now = datetime(2026, 11, 6, 8, tzinfo=UTC)
+        n, note = collect.backfill(now)
+        self.assertIn("OK", note)
+        rows = {r["valid_utc"]: r for r in csv.DictReader(collect.OBS_FILE.open())}
+        self.assertEqual(rows["2026-10-24T12:00:00Z"]["temp"], "7.5")
+        self.assertEqual(rows["2026-10-24T03:00:00Z"]["ww"], "161")
+        # stejný den se znovu nezkouší a hotový měsíc už vůbec
+        self.assertIsNone(collect.backfill(now))
+        self.assertIsNone(collect.backfill(now + timedelta(days=1)))
+
+    def test_backfill_waits_for_publication(self):
+        with collect.OBS_FILE.open("w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(collect.OBS_FIELDS)
+            w.writerow(["2026-10-30T00:00:00Z", "", "", 2, 0, "", ""])
+        self.assertEqual(collect.months_needing_backfill(datetime(2026, 11, 2, tzinfo=UTC), {}), [])
+
+
+class PrecipFilterTests(unittest.TestCase):
+    def test_ww_codes(self):
+        self.assertTrue(evaluate.ww_says_precip(161))    # automat: déšť
+        self.assertTrue(evaluate.ww_says_precip(61))     # ruční: déšť
+        self.assertFalse(evaluate.ww_says_precip(130))   # mlha
+        self.assertFalse(evaluate.ww_says_precip(508))   # nic významného
+        self.assertIsNone(evaluate.ww_says_precip(None))
+
+    def test_suspicious_windows(self):
+        base = datetime(2026, 10, 26, 0, tzinfo=UTC)
+        obs = {}
+        for h in range(24):
+            t = base + timedelta(hours=h)
+            obs[t] = {"temp": 5.0, "rh": 90.0, "wind": 2.0, "precip": 0.0, "ww": 100}
+        obs[base + timedelta(hours=3)].update(precip=1.2, ww=130)   # mlha -> okno 06
+        obs[base + timedelta(hours=9)].update(precip=1.5, ww=161)   # déšť -> v pořádku
+        obs[base + timedelta(hours=14)].update(temp=None)           # výpadek -> okno 18
+        obs[base + timedelta(hours=18)].update(precip=0.8, ww=None) # nevíme -> ponechat
+        bad = evaluate.suspicious_windows(obs)
+        self.assertEqual(sorted(b.hour for b in bad), [6, 18])
 
 
 if __name__ == "__main__":

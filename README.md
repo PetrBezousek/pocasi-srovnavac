@@ -64,6 +64,7 @@ nastavte na polohu stanice.
 | `data/forecasts/*.csv` | všechny stažené předpovědi |
 | `data/observations.csv` | hodinová měření ČHMÚ |
 | `data/runs.csv` | log volání API (úspěšnost, odezva) |
+| `data/backfill.json` | stav doplňování z měsíčních dat ČHMÚ |
 | `tests/` | testy parserů a vyhodnocení (`python -m unittest`) |
 
 Jen standardní Python 3.10+, nic se neinstaluje. Lokálně:
@@ -77,7 +78,10 @@ Jen standardní Python 3.10+, nic se neinstaluje. Lokálně:
   srážky hodnotí v 6hodinových oknech, kde posun o hodinu téměř nevadí.
 - OpenWeatherMap má zdarma jen 3hodinový krok, hodnotí se tedy na menším vzorku.
 - Visual Crossing: 8 stažení denně × 96 hodin = 768 záznamů, pod limitem 1000.
-- Soubory ČHMÚ v adresáři `now` se mažou po 24 h. Když sběr víc než den
-  neběží, měření za tu dobu chybí (předpovědi pro ty hodiny se nevyhodnotí).
+- Soubory ČHMÚ v adresáři `now` se mažou po 24 h. Výpadky (i výpadky samotné
+  stanice) se doplňují z měsíčních zkontrolovaných dat ČHMÚ (`recent`), která
+  vycházejí kolem 3. dne dalšího měsíce. Stav je v `data/backfill.json`.
+- Ze srážek se vyřazují 6h okna s výpadkem stanice a okna, kdy srážkoměr
+  něco naměřil, ale čidlo počasí (kód ww) srážky nehlásilo – typicky mlha.
 - Data ČHMÚ: zdroj Český hydrometeorologický ústav. Open-Meteo: CC BY 4.0,
   zdarma pro nekomerční použití.

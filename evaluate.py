@@ -73,7 +73,7 @@ def load_obs():
     if p.exists():
         with p.open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
-                obs[t(r["valid_utc"])] = {k: num(r[k]) for k in ("temp", "rh", "wind", "precip")}
+                obs[t(r["valid_utc"])] = {k: num(r.get(k)) for k in ("temp", "rh", "wind", "precip", "ww")}
     return obs
 
 
@@ -140,6 +140,47 @@ def precip_stats(pairs):
     }
 
 
+def ww_says_precip(ww):
+    """Hlásí čidlo počasí v dané hodině srážky? None = nevíme.
+
+    Kódy 0–99: ruční pozorování (WMO 4677), 100–199: automat (WMO 4680 + 100),
+    508 = žádný významný jev."""
+    if ww is None:
+        return None
+    w = int(ww)
+    if 0 <= w <= 99:
+        return 20 <= w <= 27 or 50 <= w <= 99
+    if 100 <= w <= 199:
+        return 120 <= w <= 126 or 140 <= w <= 199
+    if w == 508:
+        return False
+    return None
+
+
+def bad_precip_hour(o):
+    """Hodina, které u srážek nelze věřit.
+
+    - výpadek stanice (chybí teplota nebo vlhkost),
+    - srážkoměr něco naměřil, ale čidlo počasí srážky nehlásí
+      (typicky mlha, která se v trychtýři sráží jako „mrholení“)."""
+    if o is None or o.get("precip") is None:
+        return True
+    if o.get("temp") is None or o.get("rh") is None:
+        return True
+    return o["precip"] >= 0.1 and ww_says_precip(o.get("ww")) is False
+
+
+def suspicious_windows(obs):
+    """Konce 6h oken, ve kterých je aspoň jedna nedůvěryhodná hodina."""
+    W, bad = PRECIP_WINDOW_H, set()
+    for h, o in obs.items():
+        if bad_precip_hour(o):
+            # úhrn končící v čase h patří do okna končícího v nejbližším násobku W
+            end_h = math.ceil(h.timestamp() / 3600 / W) * W
+            bad.add(datetime.fromtimestamp(end_h * 3600, UTC))
+    return bad
+
+
 def precip_windows(fc_rows, obs):
     """Vrátí {(provider, bucket): [(fc, ob)]} pro 6h okna končící v 00/06/12/18 UTC."""
     by_run = defaultdict(list)
@@ -148,6 +189,7 @@ def precip_windows(fc_rows, obs):
             by_run[(r["provider"], r["issued"])].append(r)
     out = defaultdict(list)
     W = PRECIP_WINDOW_H
+    bad = suspicious_windows(obs)
     for (prov, issued), recs in by_run.items():
         by_end = defaultdict(lambda: [0.0, 0])
         for r in recs:
@@ -160,7 +202,7 @@ def precip_windows(fc_rows, obs):
                 acc[0] += r["precip"]
                 acc[1] += r["precip_h"]
         for end, (amount, hours) in by_end.items():
-            if hours != W or end - timedelta(hours=W) < issued:
+            if hours != W or end - timedelta(hours=W) < issued or end in bad:
                 continue
             ob_parts = [obs.get(end - timedelta(hours=k), {}).get("precip") for k in range(W)]
             if any(p is None for p in ob_parts):
@@ -273,6 +315,7 @@ def main():
                    "last_issued": iso(max(r["issued"] for r in fc)) if fc else None},
         "n_runs": len({r["issued"] for r in fc}),
         "n_obs_hours": sum(1 for v in obs.values() if v["temp"] is not None),
+        "precip_windows_excluded": len(suspicious_windows(obs)),
         "buckets": [b[0] for b in BUCKETS],
         "settings": {"precip_threshold_mm": PRECIP_THRESHOLD, "precip_window_h": PRECIP_WINDOW_H,
                      "min_n_hourly": MIN_N_HOURLY, "min_n_precip": MIN_N_PRECIP,

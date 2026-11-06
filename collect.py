@@ -15,11 +15,13 @@ import csv
 import json
 import math
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,7 +35,7 @@ RUNS_FILE = DATA / "runs.csv"
 
 FORECAST_FIELDS = ["issued_utc", "provider", "valid_utc", "lead_h",
                    "temp", "rh", "wind", "precip", "precip_h"]
-OBS_FIELDS = ["valid_utc", "temp", "rh", "wind", "precip"]
+OBS_FIELDS = ["valid_utc", "temp", "rh", "wind", "precip", "ww", "vv"]
 RUN_FIELDS = ["run_utc", "provider", "ok", "rows", "latency_ms", "error"]
 
 UTC = timezone.utc
@@ -352,6 +354,18 @@ def providers():
 
 # ------------------------------------------------------------ měření ČHMÚ
 
+CHMI_BASE = "https://opendata.chmi.cz/meteorology/climate"
+BACKFILL_FILE = DATA / "backfill.json"
+
+
+def _chmi_rows(data):
+    payload = data["data"]["data"]
+    header = payload["header"].split(",")
+    i_el, i_dt, i_val = header.index("ELEMENT"), header.index("DT"), header.index("VAL")
+    for row in payload["values"]:
+        yield row[i_el], parse_time(row[i_dt]), num(row[i_val])
+
+
 def parse_chmi_10m(data):
     """Z 10minutových dat ČHMÚ udělá hodinové hodnoty.
 
@@ -359,14 +373,10 @@ def parse_chmi_10m(data):
     Srážky = součet šesti 10min úhrnů končících v dané hodině
     (jen pokud je všech šest k dispozici).
     """
-    payload = data["data"]["data"]
-    header = payload["header"].split(",")
-    i_el, i_dt, i_val = header.index("ELEMENT"), header.index("DT"), header.index("VAL")
     series = {"T": {}, "H": {}, "F": {}, "SRA10M": {}}
-    for row in payload["values"]:
-        el = row[i_el]
+    for el, t, v in _chmi_rows(data):
         if el in series:
-            series[el][parse_time(row[i_dt])] = num(row[i_val])
+            series[el][t] = v
     hours = sorted({t for t in series["T"] if t.minute == 0}
                    | {t for t in series["SRA10M"] if t.minute == 0})
     out = {}
@@ -380,13 +390,128 @@ def parse_chmi_10m(data):
     return out
 
 
+def parse_chmi_1h(data):
+    """Z hodinových dat ČHMÚ vezme stav počasí (ww) a dohlednost (VV).
+
+    ww je kód automatického čidla počasí; podle něj se pozná, jestli
+    srážkoměr v dané hodině měřil déšť, nebo jen vodu z mlhy.
+    """
+    out = {}
+    for el, t, v in _chmi_rows(data):
+        if el in ("ww", "VV") and t.minute == 0 and v is not None:
+            out.setdefault(iso(t), {})["ww" if el == "ww" else "vv"] = v
+    return out
+
+
+def _merge_obs(target, new):
+    for t, rec in new.items():
+        cur = target.setdefault(t, {})
+        cur.update({k: v for k, v in rec.items() if v is not None})
+
+
 def fetch_observations(now):
-    obs = {}
+    """Stáhne včerejšek a dnešek. Každý soubor zvlášť: krátce po půlnoci
+    dnešní soubor ještě neexistuje (404), ale včerejšek se má uložit i tak."""
+    obs, errors, got = {}, [], 0
     for day in (now - timedelta(days=1), now):
-        url = ("https://opendata.chmi.cz/meteorology/climate/now/data/"
-               f"10m-{config.CHMI_STATION_WSI}-{day:%Y%m%d}.json")
-        obs.update(parse_chmi_10m(http_json(url)))
-    return obs
+        for prefix, parser in (("10m", parse_chmi_10m), ("1h", parse_chmi_1h)):
+            url = f"{CHMI_BASE}/now/data/{prefix}-{config.CHMI_STATION_WSI}-{day:%Y%m%d}.json"
+            try:
+                _merge_obs(obs, parser(http_json(url, retries=1)))
+                got += prefix == "10m"
+            except Exception as e:
+                errors.append(f"{prefix} {day:%m-%d}: {type(e).__name__}: {e}")
+    if not got:
+        raise RuntimeError("; ".join(errors))
+    return obs, errors
+
+
+# -- doplňování výpadků z měsíčních (zkontrolovaných) souborů ČHMÚ
+
+def http_text(url):
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return resp.read().decode("utf-8", "replace")
+
+
+def find_monthly_file(res, prefix, month):
+    """Najde URL měsíčního souboru stanice v adresáři /recent/.
+
+    Přesné pojmenování ČHMÚ nezaručuje, proto se prochází výpis adresáře
+    a hledá soubor se správnou stanicí, typem a měsícem."""
+    wsi, ym = config.CHMI_STATION_WSI, month.replace("-", "")
+    yyyy, mm = month.split("-")
+    for d in (f"{CHMI_BASE}/recent/data/{res}/{mm}/",
+              f"{CHMI_BASE}/recent/data/{res}/{yyyy}/{mm}/",
+              f"{CHMI_BASE}/recent/data/{res}/"):
+        try:
+            listing = http_text(d)
+        except Exception:
+            continue
+        names = re.findall(r'href="([^"?/]+\.json)"', listing)
+        hits = [n for n in names if n.startswith(f"{prefix}-{wsi}-") and ym in n]
+        if hits:
+            return d + sorted(hits)[0]
+    return None
+
+
+def months_needing_backfill(now, state):
+    """Uplynulé měsíce (poslední dva), ve kterých v měření něco chybí a které
+    ještě nebyly úspěšně doplněny. ČHMÚ je zveřejňuje kolem 3. dne dalšího měsíce."""
+    if not OBS_FILE.exists():
+        return []
+    gaps = defaultdict(int)
+    hours = {}
+    with OBS_FILE.open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            hours[r["valid_utc"]] = r
+    if not hours:
+        return []
+    first = parse_time(min(hours))
+    h = first
+    this_month = now.strftime("%Y-%m")
+    while h < now.replace(minute=0, second=0, microsecond=0):
+        r = hours.get(iso(h))
+        if r is None or not r.get("temp") or not r.get("rh") or not r.get("precip"):
+            gaps[h.strftime("%Y-%m")] += 1
+        h += timedelta(hours=1)
+    out = []
+    for m, n in sorted(gaps.items()):
+        y, mo = map(int, m.split("-"))
+        published = datetime(y + mo // 12, mo % 12 + 1, 4, tzinfo=UTC)
+        st = state.get(m, {})
+        tried_today = st.get("checked", "")[:10] == now.strftime("%Y-%m-%d")
+        if m < this_month and now >= published and not st.get("done") and not tried_today:
+            out.append(m)
+    return out[-2:]
+
+
+def backfill(now):
+    """Vrátí (počet doplněných hodin, popis) nebo None, když není co dělat."""
+    state = {}
+    if BACKFILL_FILE.exists():
+        state = json.loads(BACKFILL_FILE.read_text(encoding="utf-8"))
+    months = months_needing_backfill(now, state)
+    if not months:
+        return None
+    notes, total = [], 0
+    for m in months:
+        obs, found = {}, {}
+        for res, prefix, parser in (("10min", "10m", parse_chmi_10m), ("1hour", "1h", parse_chmi_1h)):
+            url = find_monthly_file(res, prefix, m)
+            found[prefix] = url
+            if url:
+                try:
+                    _merge_obs(obs, {t: r for t, r in parser(http_json(url)).items() if t.startswith(m)})
+                except Exception as e:
+                    found[prefix] = f"chyba {type(e).__name__}: {e}"[:150]
+        if obs:
+            total += upsert_observations(obs)
+        done = bool(found.get("10m")) and not str(found["10m"]).startswith("chyba")
+        state[m] = {"checked": iso(now), "done": done, "hours": len(obs), "files": found}
+        notes.append(f"{m}: {len(obs)} h " + ("OK" if done else f"soubor nenalezen {found}"))
+    BACKFILL_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    return total, "; ".join(notes)
 
 
 # --------------------------------------------------------------- ukládání
@@ -415,7 +540,7 @@ def upsert_observations(new_obs: dict):
     if OBS_FILE.exists():
         with OBS_FILE.open(encoding="utf-8") as f:
             for r in csv.DictReader(f):
-                existing[r["valid_utc"]] = {k: num(r[k]) for k in OBS_FIELDS[1:]}
+                existing[r["valid_utc"]] = {k: num(r.get(k)) for k in OBS_FIELDS[1:]}
     for t, rec in new_obs.items():
         cur = existing.get(t, {})
         # Novější data přepíšou starší jen tam, kde nejsou prázdná.
@@ -455,14 +580,34 @@ def main():
 
     t0 = time.monotonic()
     try:
-        n = upsert_observations(fetch_observations(now))
+        obs, partial = fetch_observations(now)
+        n = upsert_observations(obs)
         ok, err = True, ""
+        for p in partial:  # např. dnešní soubor po půlnoci ještě není – nevadí
+            print(f"  ČHMÚ (nevadí): {p}")
     except Exception as e:
         n, ok, err = 0, False, f"{type(e).__name__}: {e}"[:200]
     ms = int((time.monotonic() - t0) * 1000)
     run_log.append({"run_utc": iso(now), "provider": "chmi_observations", "ok": int(ok),
                     "rows": n, "latency_ms": ms, "error": err})
     print(f"{'ČHMÚ měření':16s} {'OK ' if ok else 'ERR'} {n:5d} hodin  {ms:6d} ms {err}")
+
+    # Doplnění výpadků z měsíčních dat ČHMÚ (jen když je co doplnit).
+    t0 = time.monotonic()
+    try:
+        res = backfill(now)
+        if res is not None:
+            n, note = res
+            ok = "OK" in note
+            run_log.append({"run_utc": iso(now), "provider": "chmi_backfill", "ok": int(ok),
+                            "rows": n, "latency_ms": int((time.monotonic() - t0) * 1000),
+                            "error": "" if ok else note[:200]})
+            print(f"{'ČHMÚ doplnění':16s} {note}")
+    except Exception as e:
+        run_log.append({"run_utc": iso(now), "provider": "chmi_backfill", "ok": 0, "rows": 0,
+                        "latency_ms": int((time.monotonic() - t0) * 1000),
+                        "error": f"{type(e).__name__}: {e}"[:200]})
+        print(f"ČHMÚ doplnění ERR {e}")
 
     append_csv(FORECAST_DIR / f"{issued:%Y-%m-%d}.csv", FORECAST_FIELDS, all_rows)
     append_csv(RUNS_FILE, RUN_FIELDS, run_log)

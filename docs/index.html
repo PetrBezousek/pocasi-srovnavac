@@ -117,6 +117,8 @@ code { font-size: 13px; }
         <li>Skutečnost = 10minutová data ze stanice ČHMÚ (opendata.chmi.cz). Teplota, vlhkost a vítr v celou hodinu, srážky jako hodinový úhrn.</li>
         <li><b>MAE</b> je průměrná absolutní chyba. <b>Bias</b> ukazuje, jestli poskytovatel soustavně přestřeluje (+) nebo podstřeluje (−).</li>
         <li>Srážky se hodnotí v 6hodinových oknech: „pršelo“ znamená aspoň 0,5 mm. <b>Trefa</b> je podíl oken, kde předpověď správně řekla ano/ne.</li>
+        <li>Ze srážek se vyřazují okna, kdy měla stanice výpadek, nebo kdy srážkoměr něco naměřil, ale čidlo počasí srážky nehlásilo (typicky mlha). Počet vyřazených oken: <span id="exclN">–</span>.</li>
+        <li>Výpadky měření se po zveřejnění zkontrolovaných měsíčních dat ČHMÚ (kolem 3. dne dalšího měsíce) automaticky doplní.</li>
         <li>Do žebříčku se poskytovatel dostane až po 24 spárovaných hodinách. Spolehlivé závěry dají až 2–4 týdny dat a různé typy počasí.</li>
         <li>Vítr se porovnává jako 10minutový průměr v 10 m; nárazy se nehodnotí.</li>
       </ul>
@@ -287,7 +289,8 @@ function renderLatest() {
 function renderAvail() {
   const A = R.availability; const ids = Object.keys(A).sort((a, b) => (A[b].rate ?? 0) - (A[a].rate ?? 0));
   if (!ids.length) { document.getElementById("avail").innerHTML = `<div class="empty">Zatím žádná data.</div>`; return; }
-  const name = id => id === "openmeteo" ? "Open-Meteo (všechny modely)" : id === "chmi_observations" ? "ČHMÚ měření" : label(id);
+  const name = id => ({openmeteo: "Open-Meteo (všechny modely)", chmi_observations: "ČHMÚ měření",
+    chmi_backfill: "ČHMÚ doplnění z měsíčních dat"})[id] || label(id);
   document.getElementById("avail").innerHTML = `<table><thead><tr><th>Zdroj</th><th class="num">Úspěšnost</th>
     <th class="num">Volání</th><th class="num">Odezva (medián)</th><th>Poslední chyba</th></tr></thead><tbody>
     ${ids.map(id => { const a = A[id]; const good = a.rate >= .95;
@@ -304,6 +307,7 @@ fetch("results.json", {cache: "no-store"}).then(r => r.json()).then(data => {
   document.getElementById("sub").textContent =
     `${R.location} · měření: ${R.station} · aktualizováno ${dt(R.generated_utc)}`;
   renderAll();
+  document.getElementById("exclN").textContent = R.precip_windows_excluded ?? "–";
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderAll);
   let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => { renderLead(); renderLatest(); }, 150); });
 }).catch(() => {
