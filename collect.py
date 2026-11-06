@@ -21,7 +21,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -456,27 +455,18 @@ def find_monthly_file(res, prefix, month):
 
 
 def months_needing_backfill(now, state):
-    """Uplynulé měsíce (poslední dva), ve kterých v měření něco chybí a které
-    ještě nebyly úspěšně doplněny. ČHMÚ je zveřejňuje kolem 3. dne dalšího měsíce."""
+    """Uplynulé měsíce, za které ještě nejsou stažená zkontrolovaná data ČHMÚ.
+
+    Okamžitá data ze stanice obsahují chyby (výpadky, mlha započtená jako
+    srážky), které ČHMÚ po kontrole opraví. Měsíční soubory vycházejí kolem
+    3. dne dalšího měsíce, proto se každý uplynulý měsíc stáhne jednou znovu."""
     if not OBS_FILE.exists():
         return []
-    gaps = defaultdict(int)
-    hours = {}
     with OBS_FILE.open(encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            hours[r["valid_utc"]] = r
-    if not hours:
-        return []
-    first = parse_time(min(hours))
-    h = first
+        months = sorted({r["valid_utc"][:7] for r in csv.DictReader(f)})
     this_month = now.strftime("%Y-%m")
-    while h < now.replace(minute=0, second=0, microsecond=0):
-        r = hours.get(iso(h))
-        if r is None or not r.get("temp") or not r.get("rh") or not r.get("precip"):
-            gaps[h.strftime("%Y-%m")] += 1
-        h += timedelta(hours=1)
     out = []
-    for m, n in sorted(gaps.items()):
+    for m in months:
         y, mo = map(int, m.split("-"))
         published = datetime(y + mo // 12, mo % 12 + 1, 4, tzinfo=UTC)
         st = state.get(m, {})

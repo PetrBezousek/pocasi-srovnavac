@@ -235,7 +235,8 @@ class ChmiFixesTests(unittest.TestCase):
         now = datetime(2026, 11, 6, 8, tzinfo=UTC)
         n, note = collect.backfill(now)
         self.assertIn("OK", note)
-        rows = {r["valid_utc"]: r for r in csv.DictReader(collect.OBS_FILE.open())}
+        with collect.OBS_FILE.open() as f:
+            rows = {r["valid_utc"]: r for r in csv.DictReader(f)}
         self.assertEqual(rows["2026-10-24T12:00:00Z"]["temp"], "7.5")
         self.assertEqual(rows["2026-10-24T03:00:00Z"]["ww"], "161")
         # stejný den se znovu nezkouší a hotový měsíc už vůbec
@@ -248,6 +249,9 @@ class ChmiFixesTests(unittest.TestCase):
             w.writerow(collect.OBS_FIELDS)
             w.writerow(["2026-10-30T00:00:00Z", "", "", 2, 0, "", ""])
         self.assertEqual(collect.months_needing_backfill(datetime(2026, 11, 2, tzinfo=UTC), {}), [])
+        self.assertEqual(collect.months_needing_backfill(datetime(2026, 11, 4, tzinfo=UTC), {}), ["2026-10"])
+        done = {"2026-10": {"done": True}}
+        self.assertEqual(collect.months_needing_backfill(datetime(2026, 12, 9, tzinfo=UTC), done), [])
 
 
 class PrecipFilterTests(unittest.TestCase):
