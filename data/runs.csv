@@ -252,3 +252,7 @@ run_utc,provider,ok,rows,latency_ms,error
 2026-11-09T11:45:28Z,metno,1,62,598,
 2026-11-09T11:45:28Z,brightsky,1,72,529,
 2026-11-09T11:45:28Z,chmi_observations,1,36,3708,
+2026-11-09T22:28:30Z,openmeteo,1,767,685,
+2026-11-09T22:28:30Z,metno,1,63,691,
+2026-11-09T22:28:30Z,brightsky,1,72,657,
+2026-11-09T22:28:30Z,chmi_observations,1,47,4167,
