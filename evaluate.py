@@ -136,6 +136,9 @@ def precip_stats(pairs):
         "pod": round(hit / (hit + miss), 3) if hit + miss else None,
         "far": round(fa / (hit + fa), 3) if hit + fa else None,
         "mae": round(sum(abs(f - o) for f, o in pairs) / n, 3),
+        # CSI: trefené srážky / (trefené + nezachycené + plané poplachy);
+        # u vzácných jevů férovější než prostá přesnost ano/ne
+        "csi": round(hit / (hit + miss + fa), 3) if hit + miss + fa else None,
         "hits": hit, "misses": miss, "false_alarms": fa, "correct_neg": cn,
     }
 
@@ -211,6 +214,38 @@ def precip_windows(fc_rows, obs):
             b = bucket_of(lead)
             if b:
                 out[(prov, b)].append((amount, sum(ob_parts)))
+    return out
+
+
+# Poskytovatelé, které umí stránka s předpovědí stáhnout přímo v prohlížeči
+# (bez API klíče).
+LIVE_PROVIDERS = ("openmeteo_", "metno", "brightsky")
+
+
+def forecast_choice(metrics, providers):
+    """Pro každý předstih a veličinu seřadí poskytovatele od nejlepšího.
+
+    Teplota a vítr podle MAE (a s biasem pro opravu soustavné chyby),
+    srážky podle CSI, při shodě podle přesnosti ano/ne.
+    Používá stránka s předpovědí (docs/index.html)."""
+    live = [p for p in providers if p.startswith(LIVE_PROVIDERS)]
+    out = {}
+    for bname, _, _ in BUCKETS:
+        out[bname] = {}
+        for var in ("temp", "wind"):
+            cand = []
+            for p in live:
+                s = metrics[p][bname][var]
+                if s.get("n", 0) >= MIN_N_HOURLY:
+                    cand.append({"provider": p, "mae": s["mae"], "bias": s["bias"], "n": s["n"]})
+            out[bname][var] = sorted(cand, key=lambda c: c["mae"])
+        cand = []
+        for p in live:
+            s = metrics[p][bname]["precip"]
+            if s.get("n", 0) >= MIN_N_PRECIP and s.get("csi") is not None:
+                cand.append({"provider": p, "csi": s["csi"], "acc": s["acc"],
+                             "pod": s["pod"], "far": s["far"], "n": s["n"]})
+        out[bname]["precip"] = sorted(cand, key=lambda c: (-c["csi"], -c["acc"]))
     return out
 
 
@@ -310,6 +345,7 @@ def main():
     result = {
         "generated_utc": iso(datetime.now(UTC)),
         "location": config.LOCATION_NAME,
+        "lat": config.LAT, "lon": config.LON,
         "station": config.CHMI_STATION_NAME,
         "period": {"first_issued": iso(min(r["issued"] for r in fc)) if fc else None,
                    "last_issued": iso(max(r["issued"] for r in fc)) if fc else None},
@@ -323,6 +359,7 @@ def main():
         "providers": [{"id": p, "label": label(p)} for p in providers],
         "metrics": metrics,
         "ranking": rank_providers(metrics, providers),
+        "choice": forecast_choice(metrics, providers),
         "temp_mae_by_lead": {p: [[k, round(sum(v) / len(v), 3), len(v)]
                                  for k, v in sorted(d.items())] for p, d in by_lead.items()},
         "daily_temp_mae": {p: [[k, round(sum(v) / len(v), 3), len(v)]

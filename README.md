@@ -39,6 +39,17 @@ vyžádá sám). Ručně je potřeba jen:
    New repository secret** s názvy z tabulky výše.
 3. Sběr lze spustit i ručně: **Actions → Sběr předpovědí → Run workflow**.
 
+## Stránka s předpovědí
+
+Hlavní stránka (`docs/index.html`) ukazuje předpověď na 7 dní. Data stahuje
+živě v prohlížeči z Open-Meteo, Bright Sky a MET Norway. Pro každou veličinu
+(teplota, srážky, vítr) a předstih (1–24, 25–48, 49–72 h) použije model, který
+podle `results.json` vyšel nejlépe; když pro danou hodinu data nemá, vezme
+další v pořadí. U teploty a větru odečte jeho naměřenou soustavnou chybu.
+Teplota a vítr se řadí podle průměrné chyby, srážky podle CSI (trefené srážky
+/ trefené + nezachycené + plané poplachy). Za 72 h se použije pořadí pro
+49–72 h a dny jsou označené jako neověřené.
+
 ## Kdy budou výsledky
 
 - **Hned:** graf „Co hlásí teď“ a dostupnost API.
@@ -60,12 +71,14 @@ nastavte na polohu stanice.
 |---|---|
 | `collect.py` | stáhne předpovědi a měření, uloží do `data/` |
 | `evaluate.py` | spočítá chyby, zapíše `docs/results.json` |
-| `docs/index.html` | dashboard |
+| `docs/index.html` | předpověď počasí složená z nejlepších modelů |
+| `docs/predpoved.js` | logika předpovědi (výběr modelů, oprava biasu, souhrny) |
+| `docs/srovnani.html` | dashboard se srovnáním modelů |
 | `data/forecasts/*.csv` | všechny stažené předpovědi |
 | `data/observations.csv` | hodinová měření ČHMÚ |
 | `data/runs.csv` | log volání API (úspěšnost, odezva) |
 | `data/backfill.json` | stav doplňování z měsíčních dat ČHMÚ |
-| `tests/` | testy parserů a vyhodnocení (`python -m unittest`) |
+| `tests/` | testy: `python -m unittest discover tests` a `node tests/test_predpoved.mjs` |
 
 Jen standardní Python 3.10+, nic se neinstaluje. Lokálně:
 `python collect.py && python evaluate.py`, pak `python -m http.server -d docs`.
