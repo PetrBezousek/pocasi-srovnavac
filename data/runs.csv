@@ -340,3 +340,7 @@ run_utc,provider,ok,rows,latency_ms,error
 2026-11-16T19:41:05Z,metno,1,66,1831,
 2026-11-16T19:41:05Z,brightsky,1,72,602,
 2026-11-16T19:41:05Z,chmi_observations,1,44,4301,
+2026-11-17T03:57:49Z,openmeteo,0,0,138336,URLError: <urlopen error _ssl.c:994: The handshake operation timed out>
+2026-11-17T03:57:49Z,metno,1,64,1354,
+2026-11-17T03:57:49Z,brightsky,1,72,656,
+2026-11-17T03:57:49Z,chmi_observations,1,28,5293,
